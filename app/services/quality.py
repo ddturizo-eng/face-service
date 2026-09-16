@@ -1,5 +1,5 @@
 """
-ABIS Web - Validación de calidad de captura.
+Averyn - Validación de calidad de captura.
 Ver docstring original en el POC (Módulo 2) para el detalle de cada check.
 """
 

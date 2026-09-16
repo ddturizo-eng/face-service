@@ -1,5 +1,5 @@
 """
-ABIS Web - Face Service
+Averyn - Face Service
 Microservicio FastAPI para detección, calidad, liveness y verificación facial.
 """
 
@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="ABIS Face Service", lifespan=lifespan)
+app = FastAPI(title="Averyn Face Service", lifespan=lifespan)
 
 
 def leer_imagen(file_bytes: bytes) -> np.ndarray:

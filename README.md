@@ -1,49 +1,53 @@
-# ABIS Web — Face Service
+# Averyn - Face Service
 
-> 🔬 **Status: POC (Proof of Concept)** — This project is a proof of concept.
+Face recognition microservice of **Averyn**, the institutional platform for identity,
+biometrics and artificial intelligence for the secure management of institutional
+processes in organizations.
+
+> **Status: POC (Proof of Concept)** - This project is a proof of concept.
 > The face verification pipeline works, but it is **not production-ready**: enrolment
 > via API, embeddings persistence (Postgres/Supabase + pgvector) and biometric data
-> protection are still pending. See [Production roadmap](#production-roadmap-pending).
+> protection are still pending. See [Production roadmap (pending)](#production-roadmap-pending).
 
 A [FastAPI](https://fastapi.tiangolo.com/) face recognition microservice that runs a
-**1:1 verification** pipeline: capture quality → face detection + anti-spoofing →
-embedding → comparison against a previously registered embedding.
+**1:1 verification** pipeline: capture quality -> face detection + anti-spoofing ->
+embedding -> comparison against a previously registered embedding.
 
 Built on [DeepFace](https://github.com/serengil/deepface) and designed to run on
 **CPU** (no GPU required) inside Docker.
 
-## ✨ Features
+## Features
 
 - **Image quality**: rejects dark, overexposed or blurry captures (configurable thresholds).
 - **Face quality**: rejects multiple faces and faces that are too small.
-- **Anti-spoofing (liveness)**: distinguishes real photos from screens/photos of screens (MiniFAS).
+- **Anti-spoofing (liveness)**: distinguishes real photos from screens or printed photos (MiniFAS).
 - **ArcFace embeddings** (512-dim) with cosine-similarity verification.
 - **Optimized**: detection + liveness in a single pass; the embedding is computed without re-detecting.
 - **Model warm-up** on startup and during the Docker build (runtime starts with no internet access).
 - **CPU-only Docker image** ready for resource-constrained hardware.
 
-## 🧱 Architecture
+## Architecture
 
 ```
-                     ┌──────────────────────────────┐
-   Client/API -----─►│  FastAPI (port 8001)         │
-    (HTTP)           │  app/main.py                 │
-                     │  ├─ GET  /health             │
-                     │  └─ POST /api/v1/face/verify │
-                     └──────────────┬───────────────┘
-                                    │
-                     ┌──────────────▼───────────────┐
-                     │  services/pipeline.py         │  Pipeline orchestration
-                     ├── services/quality.py         │  Image + face quality
-                     ├── core/config.py              │  Models, detector, thresholds
-                     └──────────────┬───────────────┘
-                                    │
-                     ┌──────────────▼───────────────┐
-                     │  DeepFace                    │
-                     │  ├─ YuNet   (detector)       │
-                     │  ├─ MiniFAS (liveness)       │
-                     │  └─ ArcFace (embedding)      │
-                     └─────────────────────────────┘
+                     +-------------------------------+
+   Client/API ------>+  FastAPI (port 8001)          +
+    (HTTP)           +  app/main.py                  +
+                     +  |- GET  /health              +
+                     +  `- POST /api/v1/face/verify  +
+                     +---------------+---------------+
+                                     |
+                     +---------------v---------------+
+                     +  services/pipeline.py          +  Pipeline orchestration
+                     +-- services/quality.py          +  Image + face quality
+                     +-- core/config.py               +  Models, detector, thresholds
+                     +---------------+---------------+
+                                     |
+                     +---------------v---------------+
+                     +  DeepFace                     +
+                     +  |- YuNet   (detector)        +
+                     +  |- MiniFAS (liveness)        +
+                     +  `- ArcFace (embedding)       +
+                     +-------------------------------+
 ```
 
 ### Models
@@ -54,12 +58,12 @@ Built on [DeepFace](https://github.com/serengil/deepface) and designed to run on
 | **ArcFace** | 512-dimensional embeddings |
 | **MiniFAS** | Liveness / anti-spoofing |
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Local (Python 3.11)
 
 ```bash
-git clone https://github.com/<your-user>/face-service.git
+git clone https://github.com/ddturizo-eng/face-service.git
 cd face-service
 python -m venv venv
 venv\Scripts\activate        # Windows  |  source venv/bin/activate (Linux/macOS)
@@ -73,14 +77,14 @@ uvicorn app.main:app --port 8001
 ### Docker
 
 ```bash
-docker build -t abis-face-service .
-docker run -p 8001:8001 abis-face-service
+docker build -t averyn-face-service .
+docker run -p 8001:8001 averyn-face-service
 ```
 
 > Models are downloaded and cached inside the image at build time, so the container
 > starts without any internet dependency.
 
-## 📡 API
+## API
 
 ### `GET /health`
 ```json
@@ -91,8 +95,8 @@ docker run -p 8001:8001 abis-face-service
 `multipart/form-data`:
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `imagen` | file | ✅ | Photo to analyze |
-| `embedding_registrado` | text | ❌ | JSON array of floats (the registered person's embedding) |
+| `imagen` | file | Yes | Photo to analyze |
+| `embedding_registrado` | text | No | JSON array of floats (the registered person's embedding) |
 
 **Response:**
 ```json
@@ -117,7 +121,7 @@ docker run -p 8001:8001 abis-face-service
 
 | `qualityIssues` | Reason |
 |---|---|
-| `resolucion_insuficiente (WxH)` | Image smaller than 200×200 px |
+| `resolucion_insuficiente (WxH)` | Image smaller than 200x200 px |
 | `imagen_muy_oscura` / `imagen_sobreexpuesta` | Mean brightness outside [60, 200] |
 | `imagen_borrosa` | Laplacian variance < 20 |
 | `ningun_rostro_detectado` | No face found |
@@ -132,7 +136,7 @@ curl -X POST http://localhost:8001/api/v1/face/verify \
   -F "embedding_registrado=[0.0012,-0.0345,...]"   # 512 floats
 ```
 
-## ⚙️ Configuration
+## Configuration
 
 All thresholds live in [`app/core/config.py`](app/core/config.py):
 
@@ -145,39 +149,39 @@ All thresholds live in [`app/core/config.py`](app/core/config.py):
 | `ANCHO_MIN` / `ALTO_MIN` | 200 / 200 | Minimum resolution (px) |
 | `ROSTRO_AREA_MIN_RATIO` | 0.05 | Face quality |
 | `ROSTRO_ANCHO_MIN_PX` | 50 | Face quality |
-| `SIMILARITY_THRESHOLD` | 0.68 | Verification (cosine) — **not calibrated** |
+| `SIMILARITY_THRESHOLD` | 0.68 | Verification (cosine) - **not calibrated** |
 
-> ⚠️ Thresholds are **starting values** and `SIMILARITY_THRESHOLD` is DeepFace's
+> **Note:** Thresholds are **starting values** and `SIMILARITY_THRESHOLD` is DeepFace's
 > documented default; recalibrate with real data (FAR/FRR) before production.
 
-## 🧪 Test scripts
+## Test scripts
 
-- [`test_comparacion_detectores.py`](test_comparacion_detectores.py) — compares
+- [`test_comparacion_detectores.py`](test_comparacion_detectores.py) - compares
   RetinaFace vs. YuNet on pairs from the LFW dataset (requires downloading
   [LFW](https://vis-www.cs.umass.edu/lfw/) into `test_images/lfw_funneled`).
 
-## 📁 Structure
+## Structure
 
 ```
 app/
-├── main.py                    # API: /health and /api/v1/face/verify
-├── core/config.py             # Models, detector and thresholds
-├── schemas/face.py            # Response schemas
-└── services/
-    ├── pipeline.py            # Pipeline orchestration
-    └── quality.py             # Image and face quality
-dockerfile                     # CPU-only image with preloaded models
-requirements.txt               # Dependencies
-warmup.py                      # Download/cache models at Docker build time
++-- main.py                     # API: /health and /api/v1/face/verify
++-- core/config.py              # Models, detector and thresholds
++-- schemas/face.py             # Response schemas
++-- services/
+|   +-- pipeline.py             # Pipeline orchestration
+|   +-- quality.py              # Image and face quality
+dockerfile                      # CPU-only image with preloaded models
+requirements.txt                # Dependencies
+warmup.py                       # Download/cache models at Docker build time
 ```
 
-## 🔒 Privacy note
+## Privacy note
 
 `test_images/` is **excluded** from version control (`.gitignore` / `.dockerignore`)
 because it may contain real face photos, which are sensitive personal data.
-**Never commit real photos or any other sensitive/anonymizeable data to this repo.**
+**Never commit real photos or any other sensitive or anonymizable data to this repo.**
 
-## 🗺️ Production roadmap (pending)
+## Production roadmap (pending)
 
 - **Enrolment**: the endpoint generates the embedding in "enrolment mode" but does
   not return it in the response; it must be exposed to register new embeddings.
@@ -190,6 +194,6 @@ because it may contain real face photos, which are sensitive personal data.
 - **Concurrency**: the endpoints block the event loop (synchronous CPU work).
 - **Automated tests** and CI.
 
-## 📄 License
+## License
 
-MIT — see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).

@@ -1,4 +1,4 @@
-# ABIS Web - Face Service
+# Averyn - Face Service
 # Imagen CPU-only, pensada para hardware limitado (sin GPU dedicada)
 
 FROM python:3.11-slim

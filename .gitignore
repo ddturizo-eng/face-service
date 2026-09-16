@@ -1,0 +1,36 @@
+# =========================================================
+# PRIVACY — NEVER commit real face photos or sensitive data
+# test_images/ may contain real face photos (personal data).
+# =========================================================
+test_images/
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.bmp
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.ruff_cache/
+.venv/
+venv/
+
+# Local environments / models downloaded at runtime
+.deepface/
+*.onnx
+*.h5
+
+# Environment & secrets (never commit)
+.env
+.env.*
+*.key
+*.pem
+secrets/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,8 @@
+venv/
+__pycache__/
+*.pyc
+test_images/
+test_*.py
+requirements-lock.txt
+.git/
+.gitignore

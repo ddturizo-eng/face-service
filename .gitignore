@@ -22,6 +22,9 @@ venv/
 *.onnx
 *.h5
 
+# Load test artifacts (regenerable, not source)
+loadtest_results/
+
 # Environment & secrets (never commit)
 .env
 .env.*

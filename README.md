@@ -5,9 +5,11 @@ biometrics and artificial intelligence for the secure management of institutiona
 processes in organizations.
 
 > **Status: POC (Proof of Concept)** - This project is a proof of concept.
-> The face verification pipeline works, but it is **not production-ready**: enrolment
-> via API, embeddings persistence (Postgres/Supabase + pgvector) and biometric data
-> protection are still pending. See [Production roadmap (pending)](#production-roadmap-pending).
+> The face verification pipeline works: quality, liveness, 1:1 verification and
+> enrolment are exposed over HTTP. It is **not production-ready**: embeddings
+> persistence (Postgres/Supabase + pgvector), biometric data protection, threshold
+> calibration and the NestJS gateway integration are still pending. See
+> [Production roadmap (pending)](#production-roadmap-pending).
 
 A [FastAPI](https://fastapi.tiangolo.com/) face recognition microservice that runs a
 **1:1 verification** pipeline: capture quality -> face detection + anti-spoofing ->
@@ -22,32 +24,38 @@ Built on [DeepFace](https://github.com/serengil/deepface) and designed to run on
 - **Face quality**: rejects multiple faces and faces that are too small.
 - **Anti-spoofing (liveness)**: distinguishes real photos from screens or printed photos (MiniFAS).
 - **ArcFace embeddings** (512-dim) with cosine-similarity verification.
+- **Enrolment endpoint**: `POST /api/v1/face/enroll` returns the 512-dim embedding after
+  the same quality + liveness checks used for verification.
 - **Optimized**: detection + liveness in a single pass; the embedding is computed without re-detecting.
+- **Non-blocking concurrency**: CPU-bound work runs in the threadpool; an inference lock keeps
+  DeepFace models safe, and a semaphore returns explicit `503` instead of silently degrading.
+- **Observability**: Prometheus metrics per pipeline stage, structured JSON logs,
+  basic and detailed health checks.
+- **Configuration via environment variables** (`FACE_*`) instead of hardcoded thresholds.
 - **Model warm-up** on startup and during the Docker build (runtime starts with no internet access).
 - **CPU-only Docker image** ready for resource-constrained hardware.
 
 ## Architecture
 
-```
-                     +-------------------------------+
-   Client/API ------>+  FastAPI (port 8001)          +
-    (HTTP)           +  app/main.py                  +
-                     +  |- GET  /health              +
-                     +  `- POST /api/v1/face/verify  +
-                     +---------------+---------------+
-                                     |
-                     +---------------v---------------+
-                     +  services/pipeline.py          +  Pipeline orchestration
-                     +-- services/quality.py          +  Image + face quality
-                     +-- core/config.py               +  Models, detector, thresholds
-                     +---------------+---------------+
-                                     |
-                     +---------------v---------------+
-                     +  DeepFace                     +
-                     +  |- YuNet   (detector)        +
-                     +  |- MiniFAS (liveness)        +
-                     +  `- ArcFace (embedding)       +
-                     +-------------------------------+
+```mermaid
+flowchart LR
+    subgraph External["Client / NestJS Gateway"]
+        CLIENT["Gateway Averyn"] -->|POST verify / enroll| FS
+        CLIENT -->|"embedding 512d (enroll)"| DB[("Supabase<br/>Postgres + pgvector")]
+    end
+
+    subgraph FS["Face Service - FastAPI :8001 (internal Docker network only)"]
+        API["app/main.py<br/>/api/v1/face/verify<br/>/api/v1/face/enroll<br/>/health /metrics"] --> PIPE["services/pipeline.py"]
+        PIPE --> Q["services/quality.py<br/>image + face quality"]
+        PIPE --> M["core/metrics.py<br/>Prometheus exports"]
+        PIPE --> CFG["core/config.py<br/>FACE_* env settings"]
+        PIPE --> DF["DeepFace"]
+        DF --> YN["YuNet (detection)"]
+        DF --> MF["MiniFAS (liveness)"]
+        DF --> AF["ArcFace (embedding)"]
+    end
+
+    DB -->|reads on verify| CLIENT
 ```
 
 ### Models
@@ -72,7 +80,8 @@ uvicorn app.main:app --port 8001
 ```
 
 > The first run downloads the models (~1-2 GB) into `~/.deepface` or `$DEEPFACE_HOME`;
-> the service warm-ups all models on startup (~10-15 s).
+> the service warm-ups all models on startup (~10-15 s). To scale, add `--workers N`
+> (each worker loads its own copy of the models).
 
 ### Docker
 
@@ -86,19 +95,63 @@ docker run -p 8001:8001 averyn-face-service
 
 ## API
 
+The full contract (payloads, error codes, SLA, timeouts) is documented in
+[`CONTRACT.md`](CONTRACT.md). Interactive docs: `/docs` (Swagger UI).
+
 ### `GET /health`
+
+Basic liveness check for the container orchestrator:
+
 ```json
 { "status": "ok" }
 ```
 
+### `GET /api/v1/face/health`
+
+Detailed check: confirms the AI models are loaded and the service can process requests:
+
+```json
+{ "status": "healthy", "models_loaded": true, "concurrent_max": 1 }
+```
+
+### `GET /metrics`
+
+Prometheus metrics (HTTP traffic + per-stage pipeline histograms).
+
+### `POST /api/v1/face/enroll`
+
+Generates the 512-dim embedding for a capture after quality + liveness checks.
+**Returns the embedding** so the caller can store it (e.g. in Supabase/pgvector).
+Internal endpoint; do not expose to the public internet.
+
+```json
+{
+  "success": true,
+  "data": {
+    "faceDetected": true,
+    "faceCount": 1,
+    "qualityOk": true,
+    "qualityIssues": [],
+    "isLive": true,
+    "livenessConfidence": 0.99,
+    "embedding": [0.0012, -0.0345, "..."]
+  },
+  "meta": { "model": "ArcFace", "detector": "yunet", "processingTimeMs": 412.3 },
+  "error": null
+}
+```
+
 ### `POST /api/v1/face/verify`
+
 `multipart/form-data`:
+
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `imagen` | file | Yes | Photo to analyze |
 | `embedding_registrado` | text | No | JSON array of floats (the registered person's embedding) |
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -117,7 +170,8 @@ docker run -p 8001:8001 averyn-face-service
 }
 ```
 
-**Early-rejection codes** (all return `verified: null`):
+**Early-rejection codes** (all return `verified: null`, HTTP 200 because the
+pipeline ran correctly):
 
 | `qualityIssues` | Reason |
 |---|---|
@@ -128,31 +182,59 @@ docker run -p 8001:8001 averyn-face-service
 | `multiples_rostros_detectados (N)` | More than one face in the image |
 | `rostro_muy_pequeno` | Face < 5% of image area or < 50 px wide |
 
+**HTTP error codes:**
+
+| Code | Meaning | Retry? |
+|---|---|---|
+| `400` | Invalid parameter (e.g. malformed `embedding_registrado`) | No |
+| `422` | Missing/invalid multipart field (FastAPI validation) | No |
+| `503` | Capacity exhausted (semaphore full) | Yes, backoff |
+| `500` | Unexpected technical error | Yes, once, then alert |
+
 ### Example with curl
 
 ```bash
+# Verify against a registered embedding
 curl -X POST http://localhost:8001/api/v1/face/verify \
   -F "imagen=@path/to/photo.jpg" \
   -F "embedding_registrado=[0.0012,-0.0345,...]"   # 512 floats
+
+# Enrol: returns the embedding
+curl -X POST http://localhost:8001/api/v1/face/enroll \
+  -F "imagen=@path/to/photo.jpg"
 ```
 
 ## Configuration
 
-All thresholds live in [`app/core/config.py`](app/core/config.py):
+All settings are loaded from environment variables with the `FACE_` prefix
+([`app/core/config.py`](app/core/config.py), pydantic-settings). Example:
 
-| Constant | Value | Description |
+```bash
+FACE_SIMILARITY_THRESHOLD=0.70 uvicorn app.main:app --port 8001
+```
+
+| Variable | Default | Description |
 |---|---|---|
-| `MODEL_NAME` | `ArcFace` | Embedding model |
-| `DETECTOR_BACKEND` | `yunet` | Face detector |
-| `BRILLO_MIN` / `BRILLO_MAX` | 60 / 200 | Image quality |
-| `NITIDEZ_MIN` | 20.0 | Image quality (Laplacian) |
-| `ANCHO_MIN` / `ALTO_MIN` | 200 / 200 | Minimum resolution (px) |
-| `ROSTRO_AREA_MIN_RATIO` | 0.05 | Face quality |
-| `ROSTRO_ANCHO_MIN_PX` | 50 | Face quality |
-| `SIMILARITY_THRESHOLD` | 0.68 | Verification (cosine) - **not calibrated** |
+| `FACE_MODEL_NAME` | `ArcFace` | Embedding model |
+| `FACE_DETECTOR_BACKEND` | `yunet` | Face detector |
+| `FACE_SIMILARITY_THRESHOLD` | `0.68` | Verification (cosine) - **not calibrated** |
+| `FACE_MAX_CONCURRENT_REQUESTS` | `1` | Concurrent requests per worker (models are not thread-safe; scale with `--workers`) |
+| `FACE_BRILLO_MIN` / `FACE_BRILLO_MAX` | 60 / 200 | Image quality |
+| `FACE_NITIDEZ_MIN` | 20.0 | Image quality (Laplacian) |
+| `FACE_ANCHO_MIN` / `FACE_ALTO_MIN` | 200 / 200 | Minimum resolution (px) |
+| `FACE_ROSTRO_AREA_MIN_RATIO` | 0.05 | Face quality |
+| `FACE_ROSTRO_ANCHO_MIN_PX` | 50 | Face quality |
+| `FACE_HOST` / `FACE_PORT` | `0.0.0.0` / `8001` | Listen address |
 
 > **Note:** Thresholds are **starting values** and `SIMILARITY_THRESHOLD` is DeepFace's
-> documented default; recalibrate with real data (FAR/FRR) before production.
+> documented default; recalibrate with real data (FAR/FRR) using
+> [`calibrate.py`](calibrate.py) before production.
+
+## Load testing
+
+[`LOAD_TEST_REPORT.md`](LOAD_TEST_REPORT.md) contains real measured numbers
+(throughput, P50/P95/P99, resource usage, degradation point) and the
+[`locustfile.py`](locustfile.py) used to reproduce them.
 
 ## Test scripts
 
@@ -164,15 +246,24 @@ All thresholds live in [`app/core/config.py`](app/core/config.py):
 
 ```
 app/
-+-- main.py                     # API: /health and /api/v1/face/verify
-+-- core/config.py              # Models, detector and thresholds
-+-- schemas/face.py             # Response schemas
++-- main.py                     # API: /health, /api/v1/face/(health|enroll|verify), /metrics
++-- core/
+|   +-- config.py               # Env-driven settings and thresholds
+|   +-- metrics.py              # Prometheus metrics
+|   +-- logging_config.py       # Structured JSON logging
++-- schemas/
+|   +-- face.py                 # Response schemas
 +-- services/
 |   +-- pipeline.py             # Pipeline orchestration
 |   +-- quality.py              # Image and face quality
+calibrate.py                    # FAR/FRR threshold calibration tool
+locustfile.py                   # Load test scenarios
+loadtest_results/               # Locust CSV results (gitignored)
 dockerfile                      # CPU-only image with preloaded models
 requirements.txt                # Dependencies
 warmup.py                       # Download/cache models at Docker build time
+SECURITY.md                     # Biometric data handling and protections
+CONTRACT.md                     # API contract for the NestJS gateway
 ```
 
 ## Privacy note
@@ -181,17 +272,17 @@ warmup.py                       # Download/cache models at Docker build time
 because it may contain real face photos, which are sensitive personal data.
 **Never commit real photos or any other sensitive or anonymizable data to this repo.**
 
+See [`SECURITY.md`](SECURITY.md) for how biometric data (embeddings) is handled,
+where it is stored, who can read it and how it is deleted.
+
 ## Production roadmap (pending)
 
-- **Enrolment**: the endpoint generates the embedding in "enrolment mode" but does
-  not return it in the response; it must be exposed to register new embeddings.
 - **Database**: no persistence yet; planned to store embeddings in Postgres
-  (Supabase) with `pgvector`.
-- **Biometric data protection**: encryption at rest, RLS, consent and deletion
-  (embeddings are sensitive data).
-- **Security**: authentication, rate limiting, TLS at deployment.
-- **Threshold calibration** with real data.
-- **Concurrency**: the endpoints block the event loop (synchronous CPU work).
+  (Supabase) with `pgvector` (the gateway stores the embeddings returned by `/enroll`).
+- **Biometric data protection**: RLS and deletion flows in Supabase, authentication
+  between gateway and face-service, TLS at deployment.
+- **Threshold calibration** with real data (FAR/FRR) - tooling in `calibrate.py`.
+- **NestJS gateway integration** using the frozen contract in `CONTRACT.md`.
 - **Automated tests** and CI.
 
 ## License

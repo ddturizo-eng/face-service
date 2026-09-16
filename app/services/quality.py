@@ -1,19 +1,12 @@
 """
-Averyn - Validación de calidad de captura.
-Ver docstring original en el POC (Módulo 2) para el detalle de cada check.
+Averyn - Validacion de calidad de captura.
 """
-
 from dataclasses import dataclass, field
+
 import cv2
 import numpy as np
 
-from app.core.config import (
-    BRILLO_MIN,
-    BRILLO_MAX,
-    NITIDEZ_MIN,
-    ROSTRO_AREA_MIN_RATIO,
-    ROSTRO_ANCHO_MIN_PX,
-)
+from app.core.config import settings
 
 
 @dataclass
@@ -24,22 +17,18 @@ class ResultadoCalidad:
 
 
 def validar_calidad_imagen(img: np.ndarray) -> ResultadoCalidad:
-    """Recibe la imagen YA CARGADA (np.ndarray), no una ruta de archivo.
-    Cambio respecto al POC: en el servicio evitamos leer el archivo dos
-    veces (una para calidad, otra para detección).
-    El chequeo de resolución mínima NO va aquí: se hace por separado en
-    pipeline.py sobre la imagen ORIGINAL, antes del redimensionado."""
+    """Valida brillo y nitidez de la imagen YA CARGADA (np.ndarray)."""
     razones = []
     gris = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     brillo = float(np.mean(gris))
     nitidez = float(cv2.Laplacian(gris, cv2.CV_64F).var())
 
-    if brillo < BRILLO_MIN:
+    if brillo < settings.BRILLO_MIN:
         razones.append(f"imagen_muy_oscura (brillo={brillo:.1f})")
-    elif brillo > BRILLO_MAX:
+    elif brillo > settings.BRILLO_MAX:
         razones.append(f"imagen_sobreexpuesta (brillo={brillo:.1f})")
-    if nitidez < NITIDEZ_MIN:
+    if nitidez < settings.NITIDEZ_MIN:
         razones.append(f"imagen_borrosa (nitidez={nitidez:.1f})")
 
     return ResultadoCalidad(
@@ -50,8 +39,7 @@ def validar_calidad_imagen(img: np.ndarray) -> ResultadoCalidad:
 
 
 def validar_calidad_rostro(img: np.ndarray, face_data: list) -> ResultadoCalidad:
-    """face_data viene ya calculado por la detección hecha en pipeline.py —
-    aquí NO se vuelve a detectar nada, solo se evalúan los datos."""
+    """Evalua calidad del rostro ya detectado (no detecta de nuevo)."""
     razones = []
 
     if len(face_data) == 0:
@@ -66,9 +54,9 @@ def validar_calidad_rostro(img: np.ndarray, face_data: list) -> ResultadoCalidad
     area_rostro = area_facial["w"] * area_facial["h"]
     ratio = area_rostro / area_imagen
 
-    if ratio < ROSTRO_AREA_MIN_RATIO:
+    if ratio < settings.ROSTRO_AREA_MIN_RATIO:
         razones.append(f"rostro_muy_pequeno (ratio={ratio:.3f})")
-    if area_facial["w"] < ROSTRO_ANCHO_MIN_PX:
+    if area_facial["w"] < settings.ROSTRO_ANCHO_MIN_PX:
         razones.append(f"rostro_muy_pequeno_en_px (ancho={area_facial['w']}px)")
 
     return ResultadoCalidad(

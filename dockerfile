@@ -14,6 +14,9 @@ WORKDIR /app
 
 # Variables de entorno agrupadas juntas
 ENV DEEPFACE_HOME=/app/.deepface
+ENV OMP_NUM_THREADS=1
+ENV TF_NUM_INTRAOP_THREADS=1
+ENV TF_NUM_INTEROP_THREADS=1
 ENV TF_CPP_MIN_LOG_LEVEL=2
 
 # Copiar solo requirements primero (aprovecha el cache de capas de Docker:
